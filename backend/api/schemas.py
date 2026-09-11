@@ -54,6 +54,15 @@ class VoiceIncomingIn(BaseModel):
     consent_given: Optional[bool] = None
 
 
+class VoiceSessionAck(BaseModel):
+    """Acknowledgement for a voice call-start event, before evidence arrives."""
+
+    schema_version: str = ENVELOPE_SCHEMA_VERSION
+    case_id: str
+    call_id: str
+    accepted: bool
+
+
 class VoiceAudioChunkIn(BaseModel):
     case_id: str
     call_id: str

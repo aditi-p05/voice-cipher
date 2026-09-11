@@ -4,6 +4,7 @@ import logging
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from backend.main import app
 from backend.api.dependencies import get_case_store, get_dispatcher, get_voice_session_store
@@ -49,9 +50,15 @@ def test_portal_intake_creates_valid_envelope():
 # 3. Voice intake accepts audio metadata/chunks
 # ---------------------------------------------------------------------------
 def test_voice_intake_accepts_audio_chunk():
+    dispatcher = get_dispatcher()
+    dispatched_before = len(dispatcher.published)
+
     start = client.post("/voice/incoming", json={"call_id": "CALL-1"})
     assert start.status_code == 200
     case_id = start.json()["case_id"]
+    assert start.json() == {"schema_version": "1.0.0", "case_id": case_id, "call_id": "CALL-1", "accepted": True}
+    # Starting a call creates a session only; it must not fabricate text evidence.
+    assert len(dispatcher.published) == dispatched_before
 
     chunk = client.post(
         "/voice/chunk",
@@ -76,6 +83,11 @@ def test_voice_intake_accepts_audio_chunk():
     assert session is not None
     assert len(session.chunks) == 1
     assert session.chunks[0].audio_ref_id == "AUD-1"
+
+
+def test_input_envelope_requires_at_least_one_modality():
+    with pytest.raises(ValidationError):
+        InputEnvelope(case_id="CASE-NOMODAL", channel=Channel.CHATBOT, modalities=[])
 
 
 # ---------------------------------------------------------------------------

@@ -219,7 +219,7 @@ Function names after Layer 0 are proposed interface names, not existing function
 | --- | --- | --- | --- |
 | `POST /chat/message` | `ChatMessageIn` | `IntakeAck` | `message` is required; optional `case_id`, `language_hint`, `channel_session_id` |
 | `POST /portal/submit` | `PortalSubmitIn` | `IntakeAck` | accepts optional `complaint_text`, `structured_data`, `audio`, `language_hint`, `consent_given`; request must yield at least one valid modality |
-| `POST /voice/incoming` | `VoiceIncomingIn` | `IntakeAck` | required `call_id`; establishes call-to-case session mapping |
+| `POST /voice/incoming` | `VoiceIncomingIn` | `VoiceSessionAck` | required `call_id`; establishes call-to-case session mapping only; it does not create an envelope or dispatch evidence |
 | `POST /voice/chunk` | `VoiceAudioChunkIn` | `IntakeAck` | required `case_id`, `call_id`, `audio`; optional provider `transcript_text` |
 | `GET /health` | none | JSON | returns `{ "status": "ok", "layer": "layer0-input" }` |
 
@@ -292,7 +292,7 @@ Future modules should return a structured error object with stable `code`, safe 
 ### Decisions the team should discuss
 
 1. The conceptual brief uses `chat`; existing working Layer 0 uses the canonical value `chatbot`. Preserve `chatbot` unless the whole team approves a versioned migration.
-2. `POST /voice/incoming` currently emits a `voice_call_started:{call_id}` text placeholder with `modalities: ["text"]`; real audio evidence arrives through `/voice/chunk`. Member 2 must not treat this placeholder as a complainant transcript. Decide whether a future envelope version models call-start events separately.
+2. `POST /voice/incoming` is a session-start event, not evidence intake. It creates no `InputEnvelope`; real voice evidence first arrives through `/voice/chunk`. Decide whether future case/session persistence needs to retain call-start language or consent details.
 3. Decide the exact persistence/queue adapter and case-management API only when the respective owners begin implementation. Current in-memory adapters are development-only.
 
 ## 15. Contract change procedure

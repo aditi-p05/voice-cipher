@@ -14,14 +14,16 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from backend.api.dependencies import get_intake_service, get_voice_session_store
+from backend.api.dependencies import get_case_store, get_intake_service, get_voice_session_store
 from backend.api.schemas import (
     ChatMessageIn,
     IntakeAck,
     PortalSubmitIn,
     VoiceAudioChunkIn,
     VoiceIncomingIn,
+    VoiceSessionAck,
 )
+from backend.ingestion.case_store import InMemoryCaseStore
 from backend.ingestion.input_envelope import ConsentStatus, EnvelopeMetadata
 from backend.ingestion.intake_service import IntakeService
 from backend.ingestion.validator import IntakeValidationError, RawIntakeRequest
@@ -92,30 +94,26 @@ def portal_submit(
     return _ack(outcome)
 
 
-@router.post("/voice/incoming", response_model=IntakeAck)
+@router.post("/voice/incoming", response_model=VoiceSessionAck)
 def voice_incoming(
     payload: VoiceIncomingIn,
-    intake_service: IntakeService = Depends(get_intake_service),
+    case_store: InMemoryCaseStore = Depends(get_case_store),
     voice_sessions: InMemoryVoiceSessionStore = Depends(get_voice_session_store),
-) -> IntakeAck:
+) -> VoiceSessionAck:
     """
     Called by the Twilio/Exotel webhook when a call starts. Establishes the
-    call<->case association; no audio content is required at this point.
+    call<->case association; no evidence or InputEnvelope exists at this point.
+    Audio evidence is accepted later through /voice/chunk.
     """
-    raw = RawIntakeRequest(
-        channel=Channel.VOICE_CALL.value,
-        modalities=[Modality.TEXT.value],  # placeholder text marks call-start event
-        case_id=payload.case_id,
-        text_body=f"voice_call_started:{payload.call_id}",
-    )
-    outcome = intake_service.handle_intake(
-        raw,
-        language_hint=payload.language_hint,
-        consent=ConsentStatus(consent_given=payload.consent_given, consent_source="ivr_prompt"),
-        metadata=EnvelopeMetadata(channel_session_id=payload.call_id),
-    )
-    voice_sessions.start_session(call_id=payload.call_id, case_id=outcome.envelope.case_id)
-    return _ack(outcome)
+    if payload.case_id:
+        if not case_store.exists(payload.case_id):
+            case_store.register_case_id(payload.case_id)
+        case_id = payload.case_id
+    else:
+        case_id = case_store.create_case()
+
+    voice_sessions.start_session(call_id=payload.call_id, case_id=case_id)
+    return VoiceSessionAck(case_id=case_id, call_id=payload.call_id, accepted=True)
 
 
 @router.post("/voice/chunk", response_model=IntakeAck)

@@ -96,7 +96,7 @@ class InputEnvelope(BaseModel):
     case_id: str
 
     channel: Channel
-    modalities: list[Modality]
+    modalities: list[Modality] = Field(..., min_length=1)
 
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     language_hint: Optional[str] = None
