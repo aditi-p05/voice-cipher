@@ -3,3 +3,14 @@ uvicorn[standard]>=0.29
 pydantic>=2.6
 pytest>=8.0
 httpx>=0.27
+
+# Layer 1 (Fusion / Privacy) — Member 2
+# Lightweight, pure-Python, no model downloads: safe for CI and demo use.
+langdetect>=1.0.9
+
+# Optional, NOT required to run tests or the demo pipeline. Install only
+# if switching PiiRedactor/SpeechToTextProvider to the Presidio/Whisper
+# backed implementations in services/fusion/redaction and services/fusion/stt.
+# presidio-analyzer
+# presidio-anonymizer
+# openai-whisper
