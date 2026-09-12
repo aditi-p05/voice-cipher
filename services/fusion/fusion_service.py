@@ -159,6 +159,20 @@ def build_evidence_bundle(
             if features_dict:
                 voice_features = VoiceFeatures(**features_dict)
 
+        # `pii_redacted` is the bundle-level privacy invariant consumed by
+        # downstream teams (see CONTRACTS.md 6.2 and services/rag/service.py's
+        # "EvidenceBundle must be PII-redacted before RAG retrieval" gate):
+        # "this bundle contains no un-redacted raw text". That is true
+        # whenever there *was* text and it went through `_redact` (the
+        # `was_redacted` case above), and it is also vacuously true when
+        # there was no text at all (e.g. an audio-only voice_call input with
+        # no STT transcript yet available) — there is nothing un-redacted to
+        # withhold. Do not conflate this with `was_redacted`/"did the
+        # redactor run on non-empty input", which produced false negatives
+        # for legitimate no-transcript evidence and incorrectly blocked
+        # every audio-only case at the Layer 1 -> Layer 4A boundary.
+        pii_redacted = True
+
         bundle = EvidenceBundle(
             case_id=envelope.case_id,
             source_input_ids=[envelope.input_id],
@@ -166,7 +180,7 @@ def build_evidence_bundle(
             markers=markers,
             sentiment=sentiment,
             voice_features=voice_features,
-            pii_redacted=was_redacted,
+            pii_redacted=pii_redacted,
         )
 
         log_event(
@@ -176,7 +190,7 @@ def build_evidence_bundle(
             has_transcript=transcript is not None,
             marker_count=len(markers),
             has_voice_features=voice_features is not None,
-            pii_redacted=was_redacted,
+            pii_redacted=pii_redacted,
         )
         return bundle
 

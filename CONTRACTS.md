@@ -129,6 +129,8 @@ Required fields: `schema_version` (string), `case_id` (string), `source_input_id
 
 Optional `transcript` fields: `text`, `language`, `confidence`, `segments`. Each marker uses `type`, `value`, and `confidence`. The bundle must contain redacted text only; downstream teams must not expect raw source text or raw audio.
 
+`pii_redacted` means "this bundle contains no un-redacted raw text" — it is `true` both when text existed and was redacted, and vacuously when there was no text at all (e.g. an audio-only input with no transcript yet available). Consumers must not treat "no transcript" as "not yet redacted"; a bundle with `transcript: null` is a legitimate build_evidence_bundle output for evidence that is currently audio/voice-features-only, and downstream gates (e.g. Layer 4A's RAG boundary check) must accept it.
+
 ```json
 {
   "schema_version": "1.0.0",
@@ -197,19 +199,23 @@ InputDispatcher.publish(input_envelope) -> DispatchResult
 
 `RoutingResult` exposes `available_modalities`, `has_audio`, `has_text`, `has_structured_data`, and `transcript_expected`. It contains no risk or escalation fields.
 
-The planned cross-module flow is:
+The cross-module flow, with actual implemented adapter names where available:
 
 ```text
 InputEnvelope
-  -> build_evidence_bundle(input_envelope) [Member 2: planned]
+  -> build_evidence_bundle(input_envelope) [Member 2: IMPLEMENTED — services.fusion.build_evidence_bundle]
   -> EvidenceBundle
-  -> calculate_svi(evidence_bundle) [Member 3: planned]
+  -> calculate_svi(evidence_bundle) [Member 3: planned — no implementation yet]
   -> SVIResult
-  -> generate_recommendation(evidence_bundle, svi_result) [Member 4: planned]
+  -> generate_recommendation(evidence_bundle, svi_result) [Member 4: IMPLEMENTED — services.rag.service.generate_recommendation,
+       also re-exported as services.rag.generate_recommendation; accepts optional
+       store, sop_directory, generator, top_k keyword arguments]
   -> ServiceRecommendation
 ```
 
-Function names after Layer 0 are proposed interface names, not existing functions. Teams must document the actual public adapter names here before integration.
+`build_evidence_bundle` also accepts optional `stt_provider`, `pii_redactor`, and `voice_feature_extractor` keyword arguments for dependency injection (see `services/fusion/fusion_service.py`); these are implementation seams, not part of the required call shape.
+
+Function names for layers without an implementation yet remain proposed interface names. Teams must document the actual public adapter names here before integration.
 
 ## 9. API contracts
 
@@ -281,13 +287,13 @@ Future modules should return a structured error object with stable `code`, safe 
 
 | Area | Status | Verified scope |
 | --- | --- | --- |
-| Layer 0 — Input / Ingestion | **CURRENT IMPLEMENTATION** | FastAPI endpoints, validation, envelope, deterministic routing, in-memory case/session/dispatch adapters, privacy-aware logging, 16 focused tests passing in the supplied source |
-| Layer 1 — Fusion / Privacy | **PLANNED** | No implementation added |
-| Layer 2 — SVI / Risk | **PLANNED** | No implementation added |
+| Layer 0 — Input / Ingestion | **IMPLEMENTED** | FastAPI endpoints, validation, envelope, deterministic routing, in-memory case/session/dispatch adapters, privacy-aware logging, 16 focused tests passing |
+| Layer 1 — Fusion / Privacy | **IMPLEMENTED** | `build_evidence_bundle(input_envelope)` — STT (mock/pluggable), redaction (regex default, Presidio optional), language detection, explainable markers, sentiment, optional voice features; 16 focused tests passing |
+| Layer 2 — SVI / Risk | **PLANNED** | No implementation added (`services/svi/` is reserved, `.gitkeep` only). Exercised only via a documented test-only harness in `tests/test_e2e_pipeline.py`, not a real implementation |
 | Layer 3 | **PLANNED / architecture placeholder** | No separate module defined yet; agree scope before creating one |
-| Layer 4 — Service | **PLANNED** | No implementation added |
-| Layer 4 — Support | **PLANNED** | No implementation added |
-| Layer 5 — Dashboard / API integration | **PLANNED** | No implementation added |
+| Layer 4 — Service (RAG) | **IMPLEMENTED** | `generate_recommendation(evidence_bundle, svi_result)` — local SOP retrieval/citation, deterministic + optional LLM generator with safe fallback, contract validation at the Evidence/SVI boundary; 7 focused tests passing |
+| Layer 4 — Support | **PLANNED** | No implementation added (`services/support/` is reserved, `.gitkeep` only) |
+| Layer 5 — Dashboard / API integration | **PLANNED** | No implementation added; `/cases`, `/case/{case_id}`, and `/case/{case_id}/confirm` remain unimplemented |
 
 ### Decisions the team should discuss
 
