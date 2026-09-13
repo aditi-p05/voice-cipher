@@ -26,6 +26,8 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from services.svi.errors import INVALID_INPUT, SviError
+
 SVI_RESULT_SCHEMA_VERSION = "1.0.0"
 
 
@@ -54,14 +56,27 @@ def risk_tier_for_score(score: float) -> RiskTier:
     """
     Map a 0-100 score to its CONTRACTS.md risk tier.
 
-    Pure helper, not wired into schema validation -- assigning the tier
-    from a score is scoring logic (owned by calculate_svi), not a shape
-    constraint on SVIResult itself.
+    Validates its own input (`0 <= score <= 100`) before mapping. This
+    is a standalone defensive check on this function -- it does not
+    change how calculate_svi computes svi_score, which already clamps
+    final_score to [0, 100] before ever calling this helper.
+
+    Pure otherwise: not wired into SVIResult's own schema validation
+    (assigning a tier from a score is scoring-adjacent logic owned by
+    calculate_svi, not a shape constraint on the SVIResult model), and
+    independent of the dashboard/orchestration layers.
     """
+    if isinstance(score, bool) or not isinstance(score, (int, float)):
+        raise SviError(INVALID_INPUT, f"risk_tier_for_score requires a numeric score, got {score!r}")
+    if score != score:  # NaN check without importing math
+        raise SviError(INVALID_INPUT, "risk_tier_for_score requires a real number, got NaN")
+    if score < 0.0 or score > 100.0:
+        raise SviError(INVALID_INPUT, f"risk_tier_for_score requires 0 <= score <= 100, got {score!r}")
+
     for lower_bound, tier in _RISK_TIER_LOWER_BOUNDS:
         if score >= lower_bound:
             return tier
-    return RiskTier.LOW  # pragma: no cover - unreachable for score >= 0
+    raise AssertionError("unreachable: score was validated to be within [0, 100]")  # pragma: no cover
 
 
 class SVIExplanationItem(BaseModel):
