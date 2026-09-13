@@ -82,14 +82,27 @@ def calculate_svi(evidence_bundle: Any, *, ml_scorer: MLScorer | None = None) ->
     # 2. Calculate deterministic rule score.
     rule_result = calculate_rule_floor(evidence_bundle)
 
-    # 3. Calculate ML score. A failing/absent scorer must never break
-    # this path -- it only removes the ML contribution.
+    # 3. Calculate ML score. A failing/absent/malformed scorer must
+    # never break this path, and must never silently masquerade as a
+    # valid score -- it only removes the ML contribution (ml_score =
+    # None). This covers three distinct failure modes the same way:
+    #   - scorer.score() raises
+    #   - scorer.score() returns something that isn't float-convertible
+    #   - scorer.score() returns NaN (min/max do not reliably clamp NaN
+    #     -- min(100.0, nan) evaluates to 100.0, not nan, so an
+    #     unguarded NaN would silently become the maximum score/
+    #     CRITICAL tier instead of "no score available")
     scorer = ml_scorer or HeuristicMockScorer()
+    ml_score: float | None
     try:
         raw_ml_score = scorer.score(features)
+        if raw_ml_score is None:
+            ml_score = None
+        else:
+            raw_ml_score = float(raw_ml_score)
+            ml_score = None if raw_ml_score != raw_ml_score else round(max(0.0, min(100.0, raw_ml_score)), 1)
     except Exception:
-        raw_ml_score = None
-    ml_score = None if raw_ml_score is None else round(max(0.0, min(100.0, float(raw_ml_score))), 1)
+        ml_score = None
 
     # 4. Apply the project's safety rule: an ML score never lowers a
     # rule-established floor.
