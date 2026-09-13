@@ -85,12 +85,18 @@ class SVIExplanationItem(BaseModel):
 
     `feature` names the contributing signal (e.g. "marker:self_harm",
     "ml_score"); `impact` is that signal's contribution in the same 0-100
-    units as `svi_score`. Generated from actual scoring features by
-    calculate_svi, never invented after the fact.
+    units as `svi_score`. `description` is an optional short
+    human-readable label for the same contribution (e.g. a rule's
+    `RuleHit.description`, from services/svi/rules.py) -- it is
+    additive/optional so this remains a non-breaking, structured-data
+    change for Members 4-6, who must keep depending on this shape only.
+    Generated from actual scoring features by calculate_svi, never
+    invented after the fact, and never an LLM-generated sentence.
     """
 
     feature: str
     impact: float
+    description: Optional[str] = None
 
     model_config = ConfigDict(extra="forbid")
 

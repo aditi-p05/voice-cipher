@@ -23,10 +23,13 @@ Steps:
      else final_score = rule_floor. A rule_floor established by a
      critical safety marker is never lowered by ml_score.
   5. Build the canonical SVIResult (svi_result.py).
-  6. `explanation` lists, in order: each triggered rule's contribution,
-     the ML contribution (if any), a `rule_floor_applied` entry
-     whenever the rule floor is what determined (or tied) the final
-     score, and a `final_score` summary entry.
+  6. `explanation` lists, in order: each triggered rule's contribution
+     (with its `RuleHit.description`, never invented here), the ML
+     contribution (if any), a `rule_floor_applied` entry whenever the
+     rule floor is what determined (or tied) the final score, a
+     `final_score` summary entry, and a `risk_tier` entry. Every entry
+     is structured data (feature/impact/description) -- never an
+     LLM-generated paragraph.
 
 Deterministic end-to-end whenever the ML component is deterministic
 (the default `HeuristicMockScorer`, or `NullMLScorer`): the same
@@ -94,21 +97,50 @@ def calculate_svi(evidence_bundle: Any, *, ml_scorer: MLScorer | None = None) ->
     final_score = round(max(0.0, min(100.0, final_score)), 1)
     risk_tier = risk_tier_for_score(final_score)
 
-    # 6. Explainability: rule contributions, ML contribution, the
-    # reason for any rule floor, and the final score.
+    # 6. Explainability: rule contributions (with their human-readable
+    # descriptions from rules.py, never invented here), the ML
+    # contribution, the reason for any rule floor, the final score, and
+    # the resulting risk tier -- all structured data, never an
+    # LLM-generated paragraph (Step 6 checkpoint).
     explanation: list[dict[str, float | str]] = [
-        {"feature": hit.code, "impact": hit.impact} for hit in rule_result.triggered_rules
+        {"feature": hit.code, "impact": hit.impact, "description": hit.description}
+        for hit in rule_result.triggered_rules
     ]
     if ml_score is not None:
-        explanation.append({"feature": "ml_score", "impact": ml_score})
+        explanation.append(
+            {
+                "feature": "ml_score",
+                "impact": ml_score,
+                "description": "Lightweight ML scorer contribution (heuristic mock unless a trained model is configured).",
+            }
+        )
 
     floor_governed = bool(rule_result.triggered_rules) and rule_result.rule_floor >= (
         ml_score if ml_score is not None else 0.0
     )
     if floor_governed:
-        explanation.append({"feature": "rule_floor_applied", "impact": rule_result.rule_floor})
+        explanation.append(
+            {
+                "feature": "rule_floor_applied",
+                "impact": rule_result.rule_floor,
+                "description": "Deterministic rule floor determined (or tied) the final score; an ML score can never lower it.",
+            }
+        )
 
-    explanation.append({"feature": "final_score", "impact": final_score})
+    explanation.append(
+        {
+            "feature": "final_score",
+            "impact": final_score,
+            "description": "Final SVI score: max(rule_floor, ml_score) per CONTRACTS.md 6.3.",
+        }
+    )
+    explanation.append(
+        {
+            "feature": "risk_tier",
+            "impact": final_score,
+            "description": f"Mapped to {risk_tier.value} risk tier per CONTRACTS.md 6.3 band for this score.",
+        }
+    )
 
     # 5. Produce the canonical SVIResult.
     return SVIResult(
