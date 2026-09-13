@@ -4,7 +4,7 @@ SIH 2026, Problem Statement 26093: AI-assisted real-time stress and trauma asses
 
 This repository begins with the working Layer 0 ingestion implementation. It accepts voice-call events and audio references, chatbot messages, and complaint-portal submissions, normalizes them into an `InputEnvelope`, and dispatches the envelope through a development in-memory dispatcher.
 
-The repository deliberately does **not** implement fusion, PII redaction, SVI/risk, RAG, orchestration, dashboard, or operator decision logic yet. Those teams integrate through the stable interfaces in [CONTRACTS.md](CONTRACTS.md).
+As of the latest integration pass, Layer 1 (Fusion/Privacy — `services/fusion/`) and Layer 4A (Service/RAG — `services/rag/`) are also implemented and merged, and are exercised end-to-end (with the SVI, Support, and Dashboard layers stood in by a documented test-only harness — see `tests/test_e2e_pipeline.py`) in the integration test suite. SVI/risk (Layer 2), gated support/orchestration (Layer 4B), and the dashboard/operator-decision API (Layer 5) are **not yet implemented** — see CONTRACTS.md §14 for current per-layer status. Those teams integrate through the stable interfaces in [CONTRACTS.md](CONTRACTS.md).
 
 ## Quick start
 

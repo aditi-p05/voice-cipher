@@ -146,6 +146,25 @@ def test_voice_with_audio_reference_only_has_no_fabricated_transcript():
 
 
 # ---------------------------------------------------------------------------
+# 5b. Audio-only, no transcript: bundle must still assert its privacy
+#     invariant (nothing un-redacted is present), or downstream consumers
+#     (e.g. RAG) will wrongly treat a legitimate no-transcript voice case
+#     as unsafe/un-redacted and block it. See CONTRACTS.md 6.2.
+# ---------------------------------------------------------------------------
+def test_audio_only_with_no_transcript_is_still_marked_pii_redacted():
+    envelope = _envelope(
+        channel=Channel.VOICE_CALL,
+        modalities=[Modality.AUDIO],
+        text=None,
+        audio=AudioReference(audio_ref_id="AUD-UNKNOWN-999"),
+    )
+    bundle = build_evidence_bundle(envelope)  # default MockSTTProvider, no fixture
+
+    assert bundle.transcript is None
+    assert bundle.pii_redacted is True
+
+
+# ---------------------------------------------------------------------------
 # 6. Missing audio (text-only envelope; audio field absent)
 # ---------------------------------------------------------------------------
 def test_missing_audio_field_does_not_break_pipeline():
