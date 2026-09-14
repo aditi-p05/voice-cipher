@@ -14,3 +14,6 @@ langdetect>=1.0.9
 # presidio-analyzer
 # presidio-anonymizer
 # openai-whisper
+
+# Layer 4B (Orchestration / Support) — Member 5
+langgraph>=0.2

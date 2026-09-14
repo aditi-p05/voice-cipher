@@ -2,29 +2,31 @@
 
 SIH 2026, Problem Statement 26093: AI-assisted real-time stress and trauma assessment support for victims/complainants accessing NHAA (14566) and its integrated portal.
 
-This repository begins with the working Layer 0 ingestion implementation. It accepts voice-call events and audio references, chatbot messages, and complaint-portal submissions, normalizes them into an `InputEnvelope`, and dispatches the envelope through a development in-memory dispatcher.
+This repository contains the working Layer 0 ingestion implementation, Layer 1 Fusion/Privacy, Layer 4A Service/RAG, and Layer 4B Orchestration/Support. It accepts voice-call events and audio references, chatbot messages, and complaint-portal submissions; normalizes them into an `InputEnvelope`; fuses them into a redacted `EvidenceBundle`; and (via `backend.orchestration.run.run_pipeline`) runs the full pipeline through to a risk-gated support decision and a procedural service recommendation, both requiring human operator confirmation.
 
-As of the latest integration pass, Layer 1 (Fusion/Privacy — `services/fusion/`) and Layer 4A (Service/RAG — `services/rag/`) are also implemented and merged, and are exercised end-to-end (with the SVI, Support, and Dashboard layers stood in by a documented test-only harness — see `tests/test_e2e_pipeline.py`) in the integration test suite. SVI/risk (Layer 2), gated support/orchestration (Layer 4B), and the dashboard/operator-decision API (Layer 5) are **not yet implemented** — see CONTRACTS.md §14 for current per-layer status. Those teams integrate through the stable interfaces in [CONTRACTS.md](CONTRACTS.md).
+SVI/Risk (Layer 2, Member 3) is now implemented (`services/svi/`) as of the `feature/svi` merge. This branch (`feature/orchestration`, Member 5) wires it into the real pipeline via `backend/orchestration/adapters/svi_adapter.py`, which prefers Member 3's real `services.svi.svi_service.calculate_svi` over the earlier documented placeholder. The dashboard/operator-decision API (Layer 5, Member 6) is still **not yet implemented** (`frontend/react-app/` is still reserved). See CONTRACTS.md §14 for current per-layer status.
 
 ## Quick start
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install -r requirements.txt   # includes langgraph for orchestration
 pytest -q
 uvicorn backend.main:app --reload
+python scripts/run_demo.py        # run a few synthetic cases through the full pipeline
 ```
 
 Open `http://127.0.0.1:8000/docs` to use the current Layer 0 API.
 
 ## Current layout
 
-- `backend/` — working Layer 0 FastAPI implementation, owned by Member 1 until integration ownership is agreed.
-- `tests/` — Layer 0 focused tests.
-- `services/` — reserved module ownership locations; intentionally contains no later-layer implementation.
+- `backend/` — Layer 0 FastAPI implementation (Member 1) plus `backend/orchestration/` — the LangGraph pipeline, Support Engine glue, voice-session accumulation, and audit consumption (Member 5).
+- `services/fusion/` — Layer 1 Fusion/Privacy (Member 2). `services/rag/` — Layer 4A Service/RAG (Member 4). `services/support/` — Layer 4B risk-gated Support Engine (Member 5). `services/svi/` — reserved for Layer 2 SVI/Risk (Member 3), not yet implemented.
+- `scripts/run_demo.py` — runs a handful of synthetic cases through the real pipeline end-to-end and prints a summary.
+- `docs/proposals/` — proposed CONTRACTS.md additions awaiting team discussion (not yet part of the contract).
+- `tests/` — focused tests per layer/module.
 - `frontend/react-app/` — reserved for Member 6's frontend.
 - `data/` — local sample/SOP locations. Never commit real complainant data or recordings.
-- `docs/` — architecture notes.
 
 See [CONTRACTS.md](CONTRACTS.md) before changing any endpoint, shared schema, enum, or inter-module interface.
