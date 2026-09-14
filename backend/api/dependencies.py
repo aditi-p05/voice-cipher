@@ -12,11 +12,15 @@ from backend.ingestion.case_store import InMemoryCaseStore
 from backend.ingestion.intake_service import IntakeService
 from backend.ingestion.voice_session import InMemoryVoiceSessionStore
 from backend.transport.dispatcher import InMemoryDispatcher
+from backend.cases.store import InMemoryCaseReadStore
+from backend.cases.service import CaseIntegrationService
 
 _case_store = InMemoryCaseStore()
 _dispatcher = InMemoryDispatcher()
 _voice_sessions = InMemoryVoiceSessionStore()
 _intake_service = IntakeService(case_store=_case_store, dispatcher=_dispatcher)
+_case_read_store = InMemoryCaseReadStore()
+_case_integration_service = CaseIntegrationService(_case_read_store)
 
 
 def get_intake_service() -> IntakeService:
@@ -33,3 +37,6 @@ def get_dispatcher() -> InMemoryDispatcher:
 
 def get_case_store() -> InMemoryCaseStore:
     return _case_store
+
+def get_case_integration_service() -> CaseIntegrationService:
+    return _case_integration_service

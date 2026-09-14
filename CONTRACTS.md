@@ -231,11 +231,13 @@ Function names for layers without an implementation yet remain proposed interfac
 
 `IntakeAck` has `schema_version`, `case_id`, `input_id`, `channel`, `modalities`, `accepted`, and `dispatch_queue`.
 
-### Planned — not implemented
+### Operator case API — implemented (development in-memory store)
 
-- `GET /cases`
-- `GET /case/{case_id}`
-- `POST /case/{case_id}/confirm`
+- `GET /cases` returns privacy-safe case summaries for the operator queue.
+- `GET /case/{case_id}` returns the aggregated dashboard case view and append-only operator action history. It never returns raw audio and only returns the Fusion layer's redacted evidence.
+- `POST /case/{case_id}/confirm` accepts an `OperatorAction` request. `operator_id` and `action` are required; `action` is `CONFIRM` or `OVERRIDE`, and an `OVERRIDE` requires a non-empty `reason`. It records an audit event but never executes an irreversible external action.
+
+The current case read model and audit repository are in-memory development adapters. Their API boundary is intentionally independent from the storage implementation so durable persistence can replace them later.
 - Evidence, SVI, service, support, dashboard, and audit endpoints
 
 Do not expose or depend on these planned endpoints until the owning team implements and tests them.

@@ -78,3 +78,9 @@ class IntakeAck(BaseModel):
     modalities: list[str]
     accepted: bool
     dispatch_queue: str
+
+class OperatorActionIn(BaseModel):
+    operator_id: str = Field(min_length=1, max_length=200)
+    action: str
+    reason: Optional[str] = Field(default=None, max_length=2000)
+    final_decision: Optional[str] = Field(default=None, max_length=4000)

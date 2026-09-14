@@ -12,9 +12,9 @@ and dispatches downstream. No NLP/LLM/ML/risk logic lives here.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
-from backend.api.dependencies import get_case_store, get_intake_service, get_voice_session_store
+from backend.api.dependencies import get_case_store, get_intake_service, get_voice_session_store, get_case_integration_service
 from backend.api.schemas import (
     ChatMessageIn,
     IntakeAck,
@@ -22,6 +22,7 @@ from backend.api.schemas import (
     VoiceAudioChunkIn,
     VoiceIncomingIn,
     VoiceSessionAck,
+    OperatorActionIn,
 )
 from backend.ingestion.case_store import InMemoryCaseStore
 from backend.ingestion.input_envelope import ConsentStatus, EnvelopeMetadata
@@ -29,8 +30,13 @@ from backend.ingestion.intake_service import IntakeService
 from backend.ingestion.validator import IntakeValidationError, RawIntakeRequest
 from backend.ingestion.voice_session import InMemoryVoiceSessionStore
 from backend.models.enums import Channel, Modality
+from backend.cases.service import CaseIntegrationService, CaseNotFoundError, OperatorActionError
 
 router = APIRouter()
+
+def _integrate(outcome, service: CaseIntegrationService) -> None:
+    # Pipeline errors are represented in the case view; a successful intake is never undone.
+    service.process(outcome.envelope)
 
 
 def _ack(outcome) -> IntakeAck:
@@ -47,7 +53,7 @@ def _ack(outcome) -> IntakeAck:
 @router.post("/chat/message", response_model=IntakeAck)
 def chat_message(
     payload: ChatMessageIn,
-    intake_service: IntakeService = Depends(get_intake_service),
+    intake_service: IntakeService = Depends(get_intake_service), integration: CaseIntegrationService = Depends(get_case_integration_service),
 ) -> IntakeAck:
     raw = RawIntakeRequest(
         channel=Channel.CHATBOT.value,
@@ -60,13 +66,13 @@ def chat_message(
         language_hint=payload.language_hint,
         metadata=EnvelopeMetadata(channel_session_id=payload.channel_session_id),
     )
-    return _ack(outcome)
+    _integrate(outcome, integration); return _ack(outcome)
 
 
 @router.post("/portal/submit", response_model=IntakeAck)
 def portal_submit(
     payload: PortalSubmitIn,
-    intake_service: IntakeService = Depends(get_intake_service),
+    intake_service: IntakeService = Depends(get_intake_service), integration: CaseIntegrationService = Depends(get_case_integration_service),
 ) -> IntakeAck:
     modalities: list[str] = []
     if payload.complaint_text:
@@ -91,7 +97,7 @@ def portal_submit(
         language_hint=payload.language_hint,
         consent=ConsentStatus(consent_given=payload.consent_given, consent_source="portal_form"),
     )
-    return _ack(outcome)
+    _integrate(outcome, integration); return _ack(outcome)
 
 
 @router.post("/voice/incoming", response_model=VoiceSessionAck)
@@ -119,7 +125,7 @@ def voice_incoming(
 @router.post("/voice/chunk", response_model=IntakeAck)
 def voice_audio_chunk(
     payload: VoiceAudioChunkIn,
-    intake_service: IntakeService = Depends(get_intake_service),
+    intake_service: IntakeService = Depends(get_intake_service), integration: CaseIntegrationService = Depends(get_case_integration_service),
     voice_sessions: InMemoryVoiceSessionStore = Depends(get_voice_session_store),
 ) -> IntakeAck:
     """Accepts one buffered audio chunk reference for an already-started call."""
@@ -146,4 +152,19 @@ def voice_audio_chunk(
     except KeyError as exc:
         raise IntakeValidationError("UNKNOWN_CALL_SESSION", str(exc), field_name="call_id")
 
-    return _ack(outcome)
+    _integrate(outcome, integration); return _ack(outcome)
+
+@router.get("/cases")
+def list_cases(service: CaseIntegrationService = Depends(get_case_integration_service)) -> dict:
+    return {"cases": service.list_cases()}
+
+@router.get("/case/{case_id}")
+def get_case(case_id: str, service: CaseIntegrationService = Depends(get_case_integration_service)) -> dict:
+    try: return service.detail(case_id)
+    except CaseNotFoundError: raise HTTPException(404, detail={"code": "CASE_NOT_FOUND", "message": "Case was not found."})
+
+@router.post("/case/{case_id}/confirm")
+def confirm_case(case_id: str, payload: OperatorActionIn, service: CaseIntegrationService = Depends(get_case_integration_service)) -> dict:
+    try: return service.act(case_id, payload.model_dump())
+    except CaseNotFoundError: raise HTTPException(404, detail={"code": "CASE_NOT_FOUND", "message": "Case was not found."})
+    except OperatorActionError as exc: raise HTTPException(400, detail={"code": "INVALID_OPERATOR_ACTION", "message": str(exc)})

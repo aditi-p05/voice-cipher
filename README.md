@@ -19,6 +19,21 @@ python scripts/run_demo.py        # run a few synthetic cases through the full p
 
 Open `http://127.0.0.1:8000/docs` to use the current Layer 0 API.
 
+## Operator dashboard and case API
+
+Each accepted intake is processed through the available pipeline and added to an in-memory, redacted operator case read model. `GET /cases`, `GET /case/{case_id}`, and `POST /case/{case_id}/confirm` provide the dashboard API. The confirmation route accepts `operator_id`, `action` (`CONFIRM` or `OVERRIDE`), optional `final_decision`, and an override `reason` (required for overrides). Every action is append-only in the case audit history; no automated action is executed.
+
+Run the dashboard after starting the backend:
+
+```powershell
+cd frontend/react-app
+npm install
+$env:VITE_API_BASE_URL = "http://127.0.0.1:8000" # optional
+npm run dev
+```
+
+The development case read model is process-local and intentionally replaceable by durable persistence later.
+
 ## Current layout
 
 - `backend/` — Layer 0 FastAPI implementation (Member 1) plus `backend/orchestration/` — the LangGraph pipeline, Support Engine glue, voice-session accumulation, and audit consumption (Member 5).
