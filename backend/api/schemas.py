@@ -70,6 +70,10 @@ class VoiceAudioChunkIn(BaseModel):
     transcript_text: Optional[str] = None  # only if the provider streams interim text alongside
 
 
+class VoiceSessionEndedIn(BaseModel):
+    call_id: str
+
+
 class IntakeAck(BaseModel):
     schema_version: str = ENVELOPE_SCHEMA_VERSION
     case_id: str

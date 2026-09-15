@@ -1,117 +1,91 @@
 """
-Layer 1 (Fusion / Privacy) — EvidenceBundle schema.
+services/fusion/evidence_bundle.py
 
-This is the shared object defined in CONTRACTS.md section 6.2. It is the
-ONLY thing Members 3 and 4 depend on; they must never import raw source
-text, raw audio, or Layer 0 internals to get "real" evidence.
+*** PLACEHOLDER CONTRACT — NOT the real Member-2-owned module. ***
 
-Hard privacy rule (CONTRACTS.md section 6.2 + this module's docstring):
-`transcript.text`, when present, MUST already be redacted before an
-EvidenceBundle is constructed. This module does not redact; it only
-defines the shape. Redaction happens in redaction/ and is enforced by
-fusion_service.build_evidence_bundle before this model is ever built.
+This file did NOT ship in the zip you gave me (voice-cipher-gap1...).
+Every other module (evidence_merge.py, run.py, state.py, nodes.py via
+fusion_adapter) imports `from services.fusion.evidence_bundle import
+EvidenceBundle, Marker, Sentiment, Transcript` and none of them work
+without it, so I wrote a minimal version that matches exactly what the
+rest of the codebase already assumes about its shape:
+
+  - EvidenceBundle is a pydantic model (run.py calls
+    `evidence_bundle.model_dump(mode="json")`)
+  - EvidenceBundle(case_id, source_input_ids, transcript, markers,
+    sentiment, voice_features, pii_redacted) — these exact kwargs are
+    used in evidence_merge.py's `merge_evidence_bundles`
+  - Transcript(text, language, confidence, segments) — same source
+  - Sentiment(valence, arousal) — same source
+  - Marker is only ever appended/unioned, never field-accessed
+    elsewhere in the code you shared, so its fields below are my
+    best guess at what Layer 2 (SVI) will want to read.
+
+ACTION ITEM: the moment your Member 2 (fusion service owner) shares
+their real services/fusion/evidence_bundle.py, replace this file with
+theirs and re-check backend/orchestration/adapters/fusion_adapter.py
+still builds a matching EvidenceBundle. Field names were chosen to
+already match usage elsewhere, so the swap should mostly be additive.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
-
-EVIDENCE_BUNDLE_SCHEMA_VERSION = "1.0.0"
+from pydantic import BaseModel, Field
 
 
 class TranscriptSegment(BaseModel):
-    """A single time-aligned (or sequence-aligned) piece of a transcript."""
-
-    text: str
-    start_seconds: Optional[float] = Field(default=None, ge=0)
-    end_seconds: Optional[float] = Field(default=None, ge=0)
-
-    model_config = ConfigDict(extra="forbid")
+    start_seconds: Optional[float] = None
+    end_seconds: Optional[float] = None
+    speaker: Optional[str] = None
+    text: str = ""
+    language: Optional[str] = None
 
 
 class Transcript(BaseModel):
-    """
-    Redacted transcript produced from text and/or STT output.
-
-    `text` must already be PII-redacted by the time it reaches this model.
-    `confidence` is an overall 0-1 confidence for the transcript as a whole
-    (STT confidence for audio-derived transcripts; 1.0 for direct text).
-    """
-
-    text: str
+    text: str = ""
     language: Optional[str] = None
-    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    confidence: float = 1.0
     segments: list[TranscriptSegment] = Field(default_factory=list)
-
-    model_config = ConfigDict(extra="forbid")
-
-
-class Marker(BaseModel):
-    """
-    An explainable, non-diagnostic vulnerability/safety marker.
-
-    `type` is the marker category (e.g. "threat", "fear", "self_harm").
-    `value` is a short explainable label/snippet for *why* it fired
-    (e.g. "retaliation"), never a diagnosis and never raw PII.
-    `confidence` is 0-1.
-    """
-
-    type: str
-    value: str
-    confidence: float = Field(ge=0.0, le=1.0)
-
-    model_config = ConfigDict(extra="forbid")
 
 
 class Sentiment(BaseModel):
-    """Dimensional sentiment/arousal representation, not a diagnosis."""
+    # valence: -1 (very negative) .. +1 (very positive)
+    # arousal:  0 (calm)          ..  1 (highly agitated)
+    valence: float = 0.0
+    arousal: float = 0.0
 
-    valence: float = Field(ge=-1.0, le=1.0)
-    arousal: float = Field(ge=0.0, le=1.0)
 
-    model_config = ConfigDict(extra="forbid")
+class Marker(BaseModel):
+    """One explicit, rule-based piece of evidence found in a transcript
+    (NOT a tone/emotion inference — those live in `Sentiment` instead).
+    Kept deliberately explainable: an operator or SVI should be able to
+    see exactly which phrase tripped this marker and why."""
+
+    marker_type: str  # e.g. "explicit_threat", "weapon_mention", "immediate_danger"
+    severity: str = "high"  # "medium" | "high" | "critical"
+    matched_text: str = ""  # the (already-redacted) phrase that triggered it
+    source: str = "transcript_rule_based"  # vs. e.g. "gemini_tone" if ever added
+    segment_start_seconds: Optional[float] = None
 
 
 class VoiceFeatures(BaseModel):
-    """
-    Optional acoustic features. The system MUST work with
-    `voice_features = None`; nothing downstream may require this.
-    """
+    """Prosody/voice-stress signal. Populated by the separate
+    voice-stress-analysis engine (retained from Detox.ai — /analyze-voice),
+    not by this Gemini transcription adapter. Left optional/empty here."""
 
-    pitch_hz_mean: Optional[float] = Field(default=None, ge=0)
-    pitch_hz_stdev: Optional[float] = Field(default=None, ge=0)
-    jitter: Optional[float] = Field(default=None, ge=0)
-    shimmer: Optional[float] = Field(default=None, ge=0)
-    pause_frequency: Optional[float] = Field(default=None, ge=0)
-    speech_rate_wpm: Optional[float] = Field(default=None, ge=0)
-
-    model_config = ConfigDict(extra="forbid")
+    pitch_mean_hz: Optional[float] = None
+    jitter: Optional[float] = None
+    shimmer: Optional[float] = None
+    speaking_rate_wpm: Optional[float] = None
 
 
 class EvidenceBundle(BaseModel):
-    """
-    Layer 1's redacted, multimodal evidence output (CONTRACTS.md 6.2).
-
-    Producer: Member 2 (Fusion / Privacy).
-    Consumers: Member 3 (SVI/Risk), Member 4 (Service/RAG).
-
-    Downstream members must depend on this shape only — never on raw
-    complaint text, raw audio, or services/fusion internals.
-    """
-
-    schema_version: str = EVIDENCE_BUNDLE_SCHEMA_VERSION
     case_id: str
     source_input_ids: list[str] = Field(default_factory=list)
-
     transcript: Optional[Transcript] = None
     markers: list[Marker] = Field(default_factory=list)
     sentiment: Optional[Sentiment] = None
     voice_features: Optional[VoiceFeatures] = None
-
     pii_redacted: bool = False
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-    model_config = ConfigDict(extra="forbid")

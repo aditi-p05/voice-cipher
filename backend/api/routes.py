@@ -14,13 +14,20 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from backend.api.dependencies import get_case_store, get_intake_service, get_voice_session_store, get_case_integration_service
+from backend.api.dependencies import (
+    get_case_integration_service,
+    get_case_store,
+    get_intake_service,
+    get_orchestration_voice_sessions,
+    get_voice_session_store,
+)
 from backend.api.schemas import (
     ChatMessageIn,
     IntakeAck,
     PortalSubmitIn,
     VoiceAudioChunkIn,
     VoiceIncomingIn,
+    VoiceSessionEndedIn,
     VoiceSessionAck,
     OperatorActionIn,
 )
@@ -29,6 +36,10 @@ from backend.ingestion.input_envelope import ConsentStatus, EnvelopeMetadata
 from backend.ingestion.intake_service import IntakeService
 from backend.ingestion.validator import IntakeValidationError, RawIntakeRequest
 from backend.ingestion.voice_session import InMemoryVoiceSessionStore
+from backend.orchestration.voice_session import (
+    InMemoryVoiceSessionStore as OrchestrationVoiceSessionStore,
+    end_voice_session,
+)
 from backend.models.enums import Channel, Modality
 from backend.cases.service import CaseIntegrationService, CaseNotFoundError, OperatorActionError
 
@@ -127,14 +138,15 @@ def voice_audio_chunk(
     payload: VoiceAudioChunkIn,
     intake_service: IntakeService = Depends(get_intake_service), integration: CaseIntegrationService = Depends(get_case_integration_service),
     voice_sessions: InMemoryVoiceSessionStore = Depends(get_voice_session_store),
+    orchestration_voice_sessions: OrchestrationVoiceSessionStore = Depends(get_orchestration_voice_sessions),
 ) -> IntakeAck:
-    """Accepts one buffered audio chunk reference for an already-started call."""
+    """Accept one audio chunk for an already-started call."""
     modalities = [Modality.AUDIO.value]
     if payload.transcript_text:
         modalities.append(Modality.TEXT.value)
 
     audio_dict = payload.audio.model_dump()
-    audio_dict.setdefault("call_id", payload.call_id)
+    audio_dict["call_id"] = payload.call_id
 
     raw = RawIntakeRequest(
         channel=Channel.VOICE_CALL.value,
@@ -147,12 +159,32 @@ def voice_audio_chunk(
         raw, metadata=EnvelopeMetadata(channel_session_id=payload.call_id)
     )
 
-    try:
-        voice_sessions.buffer_chunk(payload.call_id, outcome.envelope.audio)
-    except KeyError as exc:
-        raise IntakeValidationError("UNKNOWN_CALL_SESSION", str(exc), field_name="call_id")
+    if voice_sessions.get_session(payload.call_id) is None:
+        raise IntakeValidationError(
+            "UNKNOWN_CALL_SESSION",
+            str(KeyError(
+                f"Unknown call_id '{payload.call_id}'; call /voice/incoming first."
+            )),
+            field_name="call_id",
+        )
 
-    _integrate(outcome, integration); return _ack(outcome)
+    integration.process_voice_chunk(
+        outcome.envelope,
+        voice_store=orchestration_voice_sessions,
+    )
+    return _ack(outcome)
+
+
+@router.post("/voice/ended")
+def voice_ended(
+    payload: VoiceSessionEndedIn,
+    voice_sessions: InMemoryVoiceSessionStore = Depends(get_voice_session_store),
+    orchestration_voice_sessions: OrchestrationVoiceSessionStore = Depends(get_orchestration_voice_sessions),
+) -> dict[str, str | bool]:
+    """End a call and clear both its identity and cumulative evidence state."""
+    end_voice_session(payload.call_id, store=orchestration_voice_sessions)
+    voice_sessions.end_session(payload.call_id)
+    return {"call_id": payload.call_id, "ended": True}
 
 @router.get("/cases")
 def list_cases(service: CaseIntegrationService = Depends(get_case_integration_service)) -> dict:

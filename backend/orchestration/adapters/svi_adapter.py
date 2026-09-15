@@ -1,168 +1,146 @@
 """
-Layer 4B (Orchestration) adapter for Layer 2 (SVI / Risk).
+backend/orchestration/adapters/svi_adapter.py
 
-UPDATED: services/svi/ is now REAL (Member 3's feature/svi merge). This
-adapter prefers `services.svi.svi_service.calculate_svi` and falls back
-to `MockSVIProvider` only if that import ever fails again (e.g. running
-against an older checkout, or in isolated tests that inject their own
-provider).
+Layer 2 — Stress Vulnerability Index scoring, Gemini-backed.
 
-Two contract facts from the real implementation that this adapter must
-respect, verified by actually running it rather than assumed:
+Gemini reads the (already PII-redacted) transcript, the explicit
+rule-based markers, and the tone cues, and returns an SVI score 0-100
+with a risk tier and a short human-readable rationale the operator can
+actually see.
 
-  1. `calculate_svi` requires an actual `services.fusion.EvidenceBundle`
-     instance -- it raises `SviError(INVALID_INPUT)` for anything else,
-     including a plain dict/mapping. An earlier version of this adapter
-     converted the bundle to a mapping before calling the provider,
-     which broke the moment the real implementation landed (11 tests
-     failed with SVI_FAILED). Fixed here: the real EvidenceBundle object
-     is passed through unconverted.
-  2. `calculate_svi` returns a real `SVIResult` Pydantic model, not a
-     dict -- normalized to a dict via `.model_dump(mode="json")` here so
-     everything downstream (RAG/Support/dashboard) keeps working with
-     plain dicts, unchanged.
+WHY THERE IS A DETERMINISTIC FLOOR ON TOP OF THE MODEL
+------------------------------------------------------
+The model is the scorer, not the last word. `_apply_safety_floor`
+raises the tier -- never lowers it -- when explicit markers were found:
 
-`SviError` is now caught specifically (not just a bare `Exception`), so
-a validation failure in Layer 2 is distinguishable in principle from an
-unexpected crash -- both still degrade to the same safe `SVI_FAILED`
-code today, but the distinction is available if the team ever wants
-finer-grained codes.
+    any "critical"-severity marker  -> tier at least Critical
+    any "high"-severity marker      -> tier at least High
+
+This exists because an LLM returning a soft tier for a transcript that
+literally contains an explicit same-day death threat is a single-call
+failure mode a helpline cannot absorb, and it is exactly the dilution
+your own evidence_merge.py already refuses to allow across chunks. The
+floor only ever moves risk UP, so a model that is correctly alarmed is
+never overridden; a model that under-reacts on explicit evidence is.
+When the floor fires it is recorded in the result (`safety_floor_applied`,
+`model_risk_tier`) so it's visible rather than silent.
+
+If Member 3 later ships a real quantitative SVI implementation, pass it
+in as `Providers(svi_provider=their_fn)` -- this module is the default,
+not a hard dependency.
+
+Contract (unchanged, nodes.py depends on it):
+    run_svi(evidence_bundle, provider=None) -> (result|None, error|None)
+    result always contains "risk_tier".
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Optional, Protocol
+from typing import Callable, Optional
 
-from backend.core.logging import log_event
-from backend.orchestration.errors import stage_error
+from backend.orchestration import config, errors
+from backend.orchestration.adapters.gemini_client import call_gemini_json, evidence_to_payload
+from backend.orchestration.timeout import NodeTimeoutError, run_with_timeout
 from services.fusion.evidence_bundle import EvidenceBundle
 
-_VALID_TIERS = ("LOW", "MODERATE", "HIGH", "CRITICAL")
-_TIER_RANGES = ((0, 24, "LOW"), (25, 49, "MODERATE"), (50, 79, "HIGH"), (80, 100, "CRITICAL"))
+SVIProvider = Callable[[EvidenceBundle], dict]
 
-# Kept only for MockSVIProvider's fallback behavior. Matches the marker
-# `type` vocabulary in services/fusion/markers/marker_extractor.py, and
-# now also matches Member 3's real services/svi/rules.py critical-marker
-# table (self_harm, weapon, immediate_danger, threat, violence) -- this
-# mock is retained only as a safety net if the real import ever fails.
-_CRITICAL_MARKER_TYPES = {"self_harm", "immediate_danger", "weapon", "threat", "violence"}
+TIER_ORDER = ["Low", "Moderate", "High", "Critical"]
 
+_SVI_SYSTEM_TEXT = """
+You are scoring a caller's distress and vulnerability for the National
+Helpline Against Atrocities (NHAA, India). You will receive a JSON object
+containing a PII-redacted transcript of what the caller said, any explicit
+danger markers a separate rule-based pass already found, and coarse tone
+cues from the audio.
 
-def tier_for_score(score: float) -> str:
-    for lo, hi, name in _TIER_RANGES:
-        if lo <= score <= hi:
-            return name
-    raise ValueError("svi_score out of the valid 0-100 range")
+Return a Stress Vulnerability Index:
+  svi_score: 0-100, where 100 is maximum distress and vulnerability.
+  risk_tier: one of Low, Moderate, High, Critical.
+  rationale: 1-2 plain sentences an operator can read, referring only to
+    what is actually in the transcript or markers.
+  key_factors: short list of the specific things that drove the score.
 
+Scoring guidance:
+- Explicit statements of danger, threats, or violence in the transcript
+  are strong evidence and should dominate the score.
+- Tone cues (fear, anger, distress) are supporting evidence only. A
+  fearful tone alone, with nothing concerning said, is not High risk.
+- A calm tone does NOT reduce the weight of an explicit threat. People
+  disclose danger flatly.
+- Do not speculate beyond what was said. Do not infer identity,
+  caste, religion, or any attribute that is not stated.
+- You are one input to a human operator's decision, not the decision.
+  Never state or imply that a final action has been taken.
+"""
 
-class SVIProvider(Protocol):
-    def calculate(self, evidence_bundle: EvidenceBundle) -> Any: ...
-
-
-class MockSVIProvider:
-    """
-    Deterministic, contract-shaped FALLBACK for CONTRACTS.md 6.3, used
-    only if `services.svi.svi_service.calculate_svi` cannot be imported.
-    Not Member 3's real rule/ML layer. Takes the real EvidenceBundle
-    object (attribute access), for the same input shape as the real
-    provider, and returns a plain dict.
-    """
-
-    def calculate(self, evidence_bundle: EvidenceBundle) -> dict:
-        markers = evidence_bundle.markers or []
-        has_critical_marker = any(
-            m.type in _CRITICAL_MARKER_TYPES and (m.confidence or 0) >= 0.6 for m in markers
-        )
-        ml_score = 0.0
-        explanation: list[dict] = []
-        for m in markers:
-            impact = round((m.confidence or 0) * 20, 1)
-            ml_score += impact
-            explanation.append({"feature": m.type, "impact": impact})
-        ml_score = max(0.0, min(round(ml_score, 1), 100.0))
-        rule_floor = 80.0 if has_critical_marker else 0.0
-        if has_critical_marker:
-            explanation.append({"feature": "critical_safety_override", "impact": rule_floor})
-        final_score = max(rule_floor, ml_score)
-
-        return {
-            "schema_version": "1.0.0",
-            "case_id": evidence_bundle.case_id,
-            "svi_score": final_score,
-            "risk_tier": tier_for_score(final_score),
-            "rule_floor": rule_floor,
-            "ml_score": ml_score,
-            "explanation": explanation,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
+_SVI_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "svi_score": {"type": "number"},
+        "risk_tier": {"type": "string", "enum": TIER_ORDER},
+        "rationale": {"type": "string"},
+        "key_factors": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["svi_score", "risk_tier", "rationale"],
+}
 
 
-def _load_real_provider() -> Optional[SVIProvider]:
-    try:
-        from services.svi.svi_service import calculate_svi  # type: ignore[import]
-    except Exception:
-        return None
+def _gemini_svi(bundle: EvidenceBundle) -> dict:
+    raw = call_gemini_json(
+        system_text=_SVI_SYSTEM_TEXT,
+        user_payload=evidence_to_payload(bundle),
+        response_schema=_SVI_SCHEMA,
+    )
 
-    class _RealSVIAdapter:
-        def calculate(self, evidence_bundle: EvidenceBundle):
-            return calculate_svi(evidence_bundle)
+    model_tier = raw.get("risk_tier")
+    if model_tier not in TIER_ORDER:
+        raise ValueError(f"Gemini returned an unrecognised risk_tier: {model_tier!r}")
 
-    return _RealSVIAdapter()
+    score = float(raw.get("svi_score", 0.0) or 0.0)
+    final_tier, floor_applied = _apply_safety_floor(model_tier, bundle)
+
+    result = {
+        "svi_score": round(max(0.0, min(100.0, score)), 1),
+        "risk_tier": final_tier,
+        "rationale": raw.get("rationale", ""),
+        "key_factors": raw.get("key_factors", []),
+        "basis": "gemini_scored",
+    }
+    if floor_applied:
+        # Make the override visible rather than silently rewriting the model.
+        result["safety_floor_applied"] = True
+        result["model_risk_tier"] = model_tier
+        result["basis"] = "gemini_scored_with_safety_floor"
+    return result
 
 
-def _normalize_result(raw: Any) -> dict:
-    """Real calculate_svi returns a Pydantic SVIResult; MockSVIProvider
-    and test doubles may return a plain dict already. Accept both."""
-    dump = getattr(raw, "model_dump", None)
-    if callable(dump):
-        return dump(mode="json")
-    if isinstance(raw, dict):
-        return raw
-    raise ValueError("SVI provider returned neither a Pydantic model nor a dict")
+def _apply_safety_floor(model_tier: str, bundle: EvidenceBundle) -> tuple[str, bool]:
+    """Raise the tier to match explicit marker severity. Never lowers it."""
+    severities = {m.severity for m in bundle.markers}
+    if "critical" in severities:
+        floor = "Critical"
+    elif "high" in severities:
+        floor = "High"
+    else:
+        return model_tier, False
+
+    if TIER_ORDER.index(model_tier) >= TIER_ORDER.index(floor):
+        return model_tier, False
+    return floor, True
 
 
 def run_svi(
-    evidence_bundle: Any,
+    evidence_bundle: EvidenceBundle,
     *,
     provider: Optional[SVIProvider] = None,
+    timeout_seconds: Optional[float] = None,
 ) -> tuple[Optional[dict], Optional[dict]]:
-    """
-    Returns (svi_result, error). Exactly one is non-None. Never fabricates
-    a score on failure -- a malformed/non-EvidenceBundle input or a
-    provider exception becomes a structured SVI_FAILED error.
-    """
+    fn = provider or _gemini_svi
+    budget = timeout_seconds if timeout_seconds is not None else config.SVI_TIMEOUT_SECONDS
     try:
-        from services.svi.errors import SviError  # real, now that Layer 2 exists
-    except Exception:
-        SviError = None  # type: ignore[assignment]
-
-    active_provider = provider or _load_real_provider() or MockSVIProvider()
-    used_mock = isinstance(active_provider, MockSVIProvider) and provider is None
-
-    try:
-        if not isinstance(evidence_bundle, EvidenceBundle):
-            raise ValueError("SVI requires a real EvidenceBundle instance, not a mapping or other type.")
-
-        raw_result = active_provider.calculate(evidence_bundle)
-        result = _normalize_result(raw_result)
-
-        for field in ("schema_version", "case_id", "svi_score", "risk_tier", "rule_floor", "explanation", "created_at"):
-            if field not in result:
-                raise ValueError(f"SVIResult missing required field: {field}")
-        if not (0 <= result["svi_score"] <= 100):
-            raise ValueError("svi_score out of range")
-        if result["risk_tier"] not in _VALID_TIERS:
-            raise ValueError("invalid risk_tier")
-
-        log_event(
-            "svi_result_produced",
-            case_id=evidence_bundle.case_id,
-            risk_tier=result["risk_tier"],
-            used_mock_provider=used_mock,
-        )
-        return result, None
-    except Exception as exc:
-        if SviError is not None and isinstance(exc, SviError):
-            return None, stage_error("svi", "SVI calculation rejected malformed input.")
-        return None, stage_error("svi", "SVI calculation failed.")
+        return run_with_timeout(lambda: fn(evidence_bundle), seconds=budget), None
+    except NodeTimeoutError as exc:
+        return None, errors.stage_error("svi", str(exc), code=errors.TIMEOUT)
+    except Exception as exc:  # noqa: BLE001
+        return None, errors.stage_error("svi", f"SVI failed: {exc}")

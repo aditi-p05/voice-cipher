@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from backend.orchestration.audit import record_operator_action
 from backend.ingestion.input_envelope import InputEnvelope
 from backend.cases.store import InMemoryCaseReadStore
+
+if TYPE_CHECKING:
+    from backend.orchestration.voice_session import InMemoryVoiceSessionStore
 
 
 class CaseNotFoundError(KeyError): pass
@@ -21,6 +24,32 @@ class CaseIntegrationService:
         try:
             from backend.orchestration.run import run_pipeline
             view = run_pipeline(envelope)
+        except Exception as exc:
+            view = {
+                "schema_version": "1.0.0", "case_id": envelope.case_id,
+                "input_id": envelope.input_id, "channel": envelope.channel.value,
+                "evidence_available": False, "evidence_bundle": None,
+                "svi_result": None, "risk_tier": None,
+                "service_recommendation": None, "support_decision": None,
+                "requires_operator_confirmation": False,
+                "errors": [{"stage": "pipeline", "code": "PIPELINE_UNAVAILABLE", "message": "Pipeline output is temporarily unavailable."}],
+            }
+        self._store.upsert_pipeline_view(view)
+        return view
+
+    def process_voice_chunk(
+        self,
+        envelope: InputEnvelope,
+        *,
+        voice_store: InMemoryVoiceSessionStore,
+    ) -> dict[str, Any]:
+        """Process a voice chunk through Layer 4B's cumulative session state."""
+        # Keep the orchestration dependency lazy so a minimal Layer 0
+        # deployment continues to degrade safely when it is unavailable.
+        try:
+            from backend.orchestration.voice_session import ingest_voice_chunk
+
+            view = ingest_voice_chunk(envelope, store=voice_store)
         except Exception as exc:
             view = {
                 "schema_version": "1.0.0", "case_id": envelope.case_id,
