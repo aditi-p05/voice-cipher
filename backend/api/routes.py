@@ -168,6 +168,7 @@ def voice_audio_chunk(
             field_name="call_id",
         )
 
+    voice_sessions.add_chunk(payload.call_id, outcome.envelope.audio)
     integration.process_voice_chunk(
         outcome.envelope,
         voice_store=orchestration_voice_sessions,

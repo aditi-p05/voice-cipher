@@ -32,6 +32,10 @@ from backend.models.enums import Channel, Modality
 @dataclass
 class RoutingResult:
     queue_name: str
+    has_text: bool = False
+    has_audio: bool = False
+    has_structured_data: bool = False
+    transcript_expected: bool = False
     reasons: list[str] = field(default_factory=list)
 
 
@@ -53,4 +57,11 @@ def route(envelope: InputEnvelope) -> RoutingResult:
         reasons.append("has_text")
     if Modality.STRUCTURED_DATA in envelope.modalities:
         reasons.append("has_structured_data")
-    return RoutingResult(queue_name=queue, reasons=reasons)
+    return RoutingResult(
+        queue_name=queue,
+        has_text=Modality.TEXT in envelope.modalities,
+        has_audio=Modality.AUDIO in envelope.modalities,
+        has_structured_data=Modality.STRUCTURED_DATA in envelope.modalities,
+        transcript_expected=Modality.AUDIO in envelope.modalities,
+        reasons=reasons,
+    )

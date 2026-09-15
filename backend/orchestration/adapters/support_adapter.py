@@ -32,6 +32,7 @@ from backend.orchestration import errors
 from backend.orchestration.adapters.gemini_client import call_gemini_json, evidence_to_payload
 from backend.orchestration.timeout import NodeTimeoutError, run_with_timeout
 from services.fusion.evidence_bundle import EvidenceBundle
+from services.support.support_service import decide_support
 
 SupportFn = Callable[[EvidenceBundle, dict], dict]
 
@@ -105,7 +106,9 @@ def run_support(
     support_fn: Optional[SupportFn] = None,
     timeout_seconds: float = 5.0,
 ) -> tuple[Optional[dict], Optional[dict]]:
-    fn = support_fn or _gemini_support
+    # The deterministic Support Engine is the safe offline default. A
+    # model-backed provider can still be injected explicitly when configured.
+    fn = support_fn or decide_support
     try:
         result = run_with_timeout(lambda: fn(evidence_bundle, svi_result), seconds=timeout_seconds)
         return result, None

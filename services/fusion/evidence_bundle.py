@@ -30,9 +30,10 @@ already match usage elsewhere, so the swap should mostly be additive.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class TranscriptSegment(BaseModel):
@@ -63,11 +64,45 @@ class Marker(BaseModel):
     Kept deliberately explainable: an operator or SVI should be able to
     see exactly which phrase tripped this marker and why."""
 
-    marker_type: str  # e.g. "explicit_threat", "weapon_mention", "immediate_danger"
-    severity: str = "high"  # "medium" | "high" | "critical"
-    matched_text: str = ""  # the (already-redacted) phrase that triggered it
+    # `type`/`value`/`confidence` is the contract consumed by the SVI rule
+    # and feature layers.  The legacy names below remain available because
+    # the earlier orchestration fusion adapter still produces them.
+    type: str
+    value: str = ""
+    confidence: float = 1.0
+    marker_type: str | None = None
+    severity: str | None = None
+    matched_text: str | None = None
     source: str = "transcript_rule_based"  # vs. e.g. "gemini_tone" if ever added
     segment_start_seconds: Optional[float] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalise_legacy_shape(cls, data):
+        """Accept the old adapter shape while exposing the shared SVI shape."""
+        if not isinstance(data, dict):
+            return data
+        values = dict(data)
+        legacy_type = values.get("marker_type")
+        if not values.get("type") and legacy_type:
+            values["type"] = {
+                "weapon_mention": "weapon",
+                "abuse_disclosure": "violence",
+                "explicit_threat": "threat",
+            }.get(legacy_type, legacy_type)
+        if "value" not in values and values.get("matched_text") is not None:
+            values["value"] = values["matched_text"]
+        if "confidence" not in values:
+            values["confidence"] = {
+                "critical": 0.95,
+                "high": 0.85,
+                "medium": 0.65,
+            }.get(values.get("severity"), 1.0)
+        if not values.get("marker_type") and values.get("type"):
+            values["marker_type"] = values["type"]
+        if values.get("matched_text") is None and "value" in values:
+            values["matched_text"] = values["value"]
+        return values
 
 
 class VoiceFeatures(BaseModel):
@@ -75,13 +110,18 @@ class VoiceFeatures(BaseModel):
     voice-stress-analysis engine (retained from Detox.ai — /analyze-voice),
     not by this Gemini transcription adapter. Left optional/empty here."""
 
-    pitch_mean_hz: Optional[float] = None
+    pitch_hz_mean: Optional[float] = None
+    pitch_hz_stdev: Optional[float] = None
     jitter: Optional[float] = None
     shimmer: Optional[float] = None
+    pause_frequency: Optional[float] = None
+    # Kept for compatibility with earlier feature-extractor fixtures.
+    pitch_mean_hz: Optional[float] = None
     speaking_rate_wpm: Optional[float] = None
 
 
 class EvidenceBundle(BaseModel):
+    schema_version: str = "1.0.0"
     case_id: str
     source_input_ids: list[str] = Field(default_factory=list)
     transcript: Optional[Transcript] = None
@@ -89,3 +129,4 @@ class EvidenceBundle(BaseModel):
     sentiment: Optional[Sentiment] = None
     voice_features: Optional[VoiceFeatures] = None
     pii_redacted: bool = False
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())

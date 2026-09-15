@@ -56,6 +56,7 @@ from services.fusion.evidence_bundle import (
     Transcript,
     TranscriptSegment,
 )
+from services.fusion.fusion_service import build_evidence_bundle
 
 FusionFn = Callable[[InputEnvelope], EvidenceBundle]
 
@@ -95,14 +96,12 @@ def run_fusion(
 
 
 def default_fusion_fn(envelope: InputEnvelope) -> EvidenceBundle:
-    """Audio wins when both audio and text are present (portal allows
-    both) -- audio is the richer signal. Adjust here if you'd rather
-    merge both instead."""
-    if envelope.audio is not None:
-        return _fuse_audio(envelope)
-    if envelope.text is not None:
-        return _fuse_text(envelope)
-    raise ValueError("InputEnvelope has neither audio nor text to fuse")
+    """Use the Layer 1 public adapter for every modality.
+
+    It handles text, audio-only, and multimodal envelopes without requiring
+    a Gemini key for an audio reference that has no registered transcript.
+    """
+    return build_evidence_bundle(envelope)
 
 
 def _fuse_audio(envelope: InputEnvelope) -> EvidenceBundle:

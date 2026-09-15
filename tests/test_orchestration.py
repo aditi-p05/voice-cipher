@@ -11,7 +11,6 @@ from backend.ingestion.input_envelope import (
     TextContent,
 )
 from backend.models.enums import Channel, Modality
-from backend.orchestration.adapters.svi_adapter import MockSVIProvider
 from backend.orchestration.errors import EXTERNAL_SERVICE_FAILED
 from backend.orchestration.nodes import Providers
 from backend.orchestration.run import run_pipeline

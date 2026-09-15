@@ -16,13 +16,15 @@ it without changing the API layer.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
 class VoiceSession:
     call_id: str
     case_id: str
+    chunks: list[Any] = field(default_factory=list)
 
 
 class VoiceSessionStore(ABC):
@@ -32,6 +34,10 @@ class VoiceSessionStore(ABC):
 
     @abstractmethod
     def get_session(self, call_id: str) -> VoiceSession | None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def add_chunk(self, call_id: str, chunk: Any) -> None:
         raise NotImplementedError
 
     @abstractmethod
@@ -56,6 +62,12 @@ class InMemoryVoiceSessionStore(VoiceSessionStore):
 
     def get_session(self, call_id: str) -> VoiceSession | None:
         return self._sessions.get(call_id)
+
+    def add_chunk(self, call_id: str, chunk: Any) -> None:
+        session = self._sessions.get(call_id)
+        if session is None:
+            raise KeyError(f"Unknown call_id '{call_id}'")
+        session.chunks.append(chunk)
 
     def end_session(self, call_id: str) -> None:
         self._sessions.pop(call_id, None)

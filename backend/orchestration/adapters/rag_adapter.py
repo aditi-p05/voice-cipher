@@ -32,6 +32,7 @@ from backend.orchestration import errors
 from backend.orchestration.adapters.gemini_client import call_gemini_json, evidence_to_payload
 from backend.orchestration.timeout import NodeTimeoutError, run_with_timeout
 from services.fusion.evidence_bundle import EvidenceBundle
+from services.rag.service import generate_recommendation
 
 RagFn = Callable[[EvidenceBundle, dict], dict]
 
@@ -125,7 +126,9 @@ def run_rag(
     rag_fn: Optional[RagFn] = None,
     timeout_seconds: float = 10.0,
 ) -> tuple[Optional[dict], Optional[dict]]:
-    fn = rag_fn or _gemini_rag
+    # Keep the pipeline runnable and deterministic locally; model-backed
+    # recommendation remains available through explicit dependency injection.
+    fn = rag_fn or generate_recommendation
     try:
         result = run_with_timeout(lambda: fn(evidence_bundle, svi_result), seconds=timeout_seconds)
         return result, None

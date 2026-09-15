@@ -59,6 +59,7 @@ class InMemoryDispatcher(InputDispatcher):
             self._published.append(envelope)
         return DispatchResult(accepted=True, queue_name=self._queue_name)
 
+    @property
     def published(self) -> list[InputEnvelope]:
         """Test/demo helper -- not part of the InputDispatcher contract."""
         with self._lock:
