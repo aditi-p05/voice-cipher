@@ -1,1 +1,9 @@
-{"name":"voice-cipher-operator-dashboard","private":true,"version":"1.0.0","type":"module","scripts":{"dev":"vite","build":"vite"},"dependencies":{"@vitejs/plugin-react":"latest","vite":"latest","react":"latest","react-dom":"latest"},"devDependencies":{}}
+{
+  "name": "voice-cipher-nhaa-dashboard",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": { "dev": "vite", "build": "vite", "preview": "vite preview" },
+  "dependencies": { "@vitejs/plugin-react": "latest", "vite": "latest", "react": "latest", "react-dom": "latest" },
+  "devDependencies": { "tailwindcss": "latest", "@tailwindcss/vite": "latest" }
+}

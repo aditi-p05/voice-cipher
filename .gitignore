@@ -23,3 +23,5 @@ data/uploads/
 *.mp3
 *.ogg
 *.webm
+node_modules/
+.pyc
